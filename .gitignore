@@ -4,3 +4,5 @@ dist
 
 api.err
 api.log
+api2.log
+api2.err
