@@ -7,7 +7,8 @@ function escapeRegExp(text) {
 }
 
 async function getServices(req, res) {
-  const query = {};
+  // Public browse page: only active services are visible.
+  const query = { isActive: true };
   if (req.query.category) query.category = String(req.query.category);
   if (req.query.search) {
     const pattern = new RegExp(escapeRegExp(String(req.query.search)), 'i');
@@ -17,6 +18,20 @@ async function getServices(req, res) {
     .select('name description category price durationMinutes imageUrl isActive')
     .sort({ name: 1 });
   return res.json({ success: true, services });
+}
+
+async function getServicesAll(req, res) {
+  // Admin view: every service, active and inactive.
+  const query = {};
+  if (req.query.category) query.category = String(req.query.category);
+  if (req.query.search) {
+    const pattern = new RegExp(escapeRegExp(String(req.query.search)), 'i');
+    query.$or = [{ name: pattern }, { description: pattern }, { category: pattern }];
+  }
+  const services = await Service.find(query)
+    .select('name description category price durationMinutes imageUrl isActive')
+    .sort({ name: 1 });
+  return res.json({ success: true, services: services.map(serializeService) });
 }
 
 async function getService(req, res) {
@@ -29,15 +44,24 @@ async function getService(req, res) {
 
 async function createService(req, res) {
   const { name, description, category, price, durationMinutes, imageUrl, isActive } = req.body || {};
-  if (!name || price === undefined) {
-    return res.status(400).json({ success: false, error: 'Name and price are required' });
+  if (!name) {
+    return res.status(400).json({ success: false, error: 'Name is required' });
+  }
+  if (price === undefined || price === null || price === '' || !Number.isFinite(Number(price)) || Number(price) <= 0) {
+    return res.status(400).json({ success: false, error: 'Price must be a positive number' });
+  }
+  const durationRaw = durationMinutes === undefined || durationMinutes === null || durationMinutes === ''
+    ? 60
+    : Number(durationMinutes);
+  if (!Number.isFinite(durationRaw) || durationRaw <= 0) {
+    return res.status(400).json({ success: false, error: 'Duration must be a positive number of minutes' });
   }
   const service = await Service.create({
     name: String(name).trim(),
     description: description ? String(description) : '',
     category: category ? String(category).trim() : 'general',
     price: Number(price),
-    durationMinutes: durationMinutes ? Number(durationMinutes) : 60,
+    durationMinutes: durationRaw,
     imageUrl: imageUrl ? String(imageUrl) : '',
     isActive: isActive === undefined ? true : Boolean(isActive),
   });
@@ -59,6 +83,18 @@ async function updateService(req, res) {
   return res.json({ success: true, service: serializeService(service) });
 }
 
+// Activate or deactivate a service (admin only).
+async function setServiceStatus(req, res) {
+  const { id } = req.params;
+  const isActive = req.body?.isActive;
+  if (typeof isActive !== 'boolean') {
+    return res.status(400).json({ success: false, error: 'isActive must be a boolean' });
+  }
+  const service = await Service.findByIdAndUpdate(id, { isActive }, { new: true });
+  if (!service) return res.status(404).json({ success: false, error: 'Service not found' });
+  return res.json({ success: true, service: serializeService(service) });
+}
+
 async function deleteService(req, res) {
   const service = await Service.findByIdAndDelete(req.params.id);
   if (!service) return res.status(404).json({ success: false, error: 'Service not found' });
@@ -74,4 +110,7 @@ async function uploadServiceImage(req, res) {
   return res.json({ success: true, url, filename: req.file.originalname });
 }
 
-module.exports = { getServices, getService, createService, updateService, deleteService, uploadServiceImage };
+module.exports = {
+  getServices, getServicesAll, getService,
+  createService, updateService, deleteService, setServiceStatus, uploadServiceImage,
+};

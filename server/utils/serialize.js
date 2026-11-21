@@ -37,6 +37,10 @@ function serializePayment(p) {
   plain.appointmentId = deref(plain.appointmentId);
   plain.customerId = deref(plain.customerId);
   plain.appointment = p.appointmentId || null;
+  const populatedAppointment = p.appointmentId && typeof p.appointmentId === 'object' ? p.appointmentId : null;
+  plain.service = populatedAppointment?.serviceName || null;
+  plain.serviceId = populatedAppointment?.serviceId || null;
+  plain.appointmentDate = populatedAppointment?.appointmentDate || plain.appointmentDate || null;
   plain.updatedAt = new Date(plain.updatedAt).toISOString();
   return plain;
 }

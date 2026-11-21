@@ -4,9 +4,9 @@ const { serializePayment } = require('../utils/serialize');
 const { stripe } = require('../services/stripe');
 
 async function getPayments(req, res) {
-  const query = { customerId: req.user.id };
+  const query = req.user.role === 'admin' ? {} : { customerId: req.user.id };
   const payments = await Payment.find(query)
-    .populate('appointmentId', 'serviceName appointmentDate')
+    .populate('appointmentId', 'serviceName appointmentDate serviceId')
     .sort({ createdAt: -1 });
   return res.json({ success: true, payments: payments.map(serializePayment) });
 }
@@ -21,7 +21,7 @@ async function getPayment(req, res) {
 
 async function createCheckout(req, res) {
   const { appointmentId } = req.params;
-  const appointment = await Appointment.findById(appointmentId);
+  const appointment = await Appointment.findById(appointmentId).populate('serviceId', 'name serviceName appointmentDate');
   if (!appointment) return res.status(404).json({ success: false, error: 'Appointment not found' });
   if (!stripe) {
     return res.status(503).json({ success: false, error: 'Stripe is not configured. Add STRIPE_SECRET_KEY to your .env file.' });

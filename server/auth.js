@@ -31,6 +31,7 @@ function getAuth() {
         // Every user is a customer; admins are seeded from ADMIN_EMAIL/ADMIN_PASSWORD.
         additionalFields: {
           role: { type: 'string', default: 'customer', required: false },
+          blocked: { type: 'boolean', default: false, required: false },
         },
       },
     });

@@ -20,6 +20,7 @@ async function createApp() {
   app.all('/api/auth/*splat', toNodeHandler(getAuth()));
 
   app.use('/api/services', require('./routes/serviceRoutes'));
+  app.use('/api/admin', require('./routes/adminStatsRoutes'));
   app.use('/api/appointments', require('./routes/appointmentRoutes'));
   app.use('/api/payments', require('./routes/paymentRoutes'));
   app.use('/api/customers', require('./routes/customerRoutes'));

@@ -7,6 +7,9 @@ async function requireAuth(req, res, next) {
     if (!result || !result.user) {
       return res.status(401).json({ success: false, error: 'Please authenticate to continue' });
     }
+    if (result.user.blocked) {
+      return res.status(403).json({ success: false, error: 'This account is blocked' });
+    }
     req.user = result.user;
     next();
   } catch (err) {
@@ -17,7 +20,9 @@ async function requireAuth(req, res, next) {
 
 function requireRole(role) {
   return async (req, res, next) => {
-    if (!req.user || req.user.role !== role) {
+    // Users without a stored role are customers (the additionalFields default).
+    const userRole = req.user ? (req.user.role || 'customer') : null;
+    if (!req.user || userRole !== role) {
       return res.status(403).json({ success: false, error: `This action requires the ${role} role` });
     }
     next();
