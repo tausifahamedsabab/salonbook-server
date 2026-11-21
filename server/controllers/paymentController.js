@@ -4,20 +4,17 @@ const { serializePayment } = require('../utils/serialize');
 const { stripe } = require('../services/stripe');
 
 async function getPayments(req, res) {
-  const query = req.user.role === 'admin' ? {} : { customerId: req.user._id };
+  const query = { customerId: req.user.id };
   const payments = await Payment.find(query)
     .populate('appointmentId', 'serviceName appointmentDate')
-    .populate('customerId', 'name email')
     .sort({ createdAt: -1 });
   return res.json({ success: true, payments: payments.map(serializePayment) });
 }
 
 async function getPayment(req, res) {
-  const query = { _id: req.params.id };
-  if (req.user.role !== 'admin') query.customerId = req.user._id;
+  const query = { _id: req.params.id, customerId: req.user.id };
   const payment = await Payment.findOne(query)
-    .populate('appointmentId', 'serviceName appointmentDate')
-    .populate('customerId', 'name email');
+    .populate('appointmentId', 'serviceName appointmentDate');
   if (!payment) return res.status(404).json({ success: false, error: 'Payment not found' });
   return res.json({ success: true, payment: serializePayment(payment) });
 }
@@ -49,7 +46,7 @@ async function createCheckout(req, res) {
     success_url: `${appUrl}/customer/appointments?paid=1`,
     cancel_url: `${appUrl}/customer/appointments`,
     customer_email: req.user.email,
-    metadata: { appointmentId: appointment._id.toString(), customerId: req.user._id.toString() },
+    metadata: { appointmentId: appointment._id.toString(), customerId: req.user.id },
     allow_promotion_codes: true,
   });
   payment.stripeCheckoutSessionId = session.id;

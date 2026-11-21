@@ -1,22 +1,43 @@
 const bcrypt = require('bcryptjs');
-const User = require('./models/User');
+const mongoose = require('mongoose');
 const Service = require('./models/Service');
+const { getAuth } = require('./auth');
 
 async function seed() {
-  // Bootstrap admin from environment (idempotent)
+  const auth = getAuth();
+  const users = mongoose.connection.db.collection('users');
+  const services = mongoose.connection.db.collection('services');
+
+  // Bootstrap admin from environment (created once via Better Auth).
   const adminEmail = process.env.ADMIN_EMAIL;
   const adminPassword = process.env.ADMIN_PASSWORD;
   if (adminEmail && adminPassword) {
-    const hash = await bcrypt.hash(adminPassword, 10);
-    await User.updateOne(
-      { email: adminEmail.toLowerCase(), role: 'admin' },
-      { $set: { name: process.env.ADMIN_NAME || 'Admin', email: adminEmail.toLowerCase(), passwordHash: hash, role: 'admin' } },
-      { upsert: true }
-    );
-    console.log('[seed] Admin user ready:', adminEmail);
+    const existing = await users.findOne({ email: adminEmail.toLowerCase() });
+    const isBetterAuthUser = Boolean(existing && existing.password);
+    // Delete legacy users (old schema) so Better Auth can create the admin cleanly.
+    if (existing && !isBetterAuthUser) {
+      await users.deleteOne({ _id: existing._id });
+    }
+    if (!isBetterAuthUser) {
+      try {
+        await auth.api.signUpEmail({
+          body: {
+            name: process.env.ADMIN_NAME || 'Admin',
+            email: adminEmail,
+            password: adminPassword,
+            role: 'admin',
+          },
+        });
+        console.log('[seed] Admin user created:', adminEmail);
+      } catch (err) {
+        console.error('[seed] Failed to create admin user:', err && err.message ? err.message : err);
+      }
+    } else {
+      console.log('[seed] Admin user already exists:', adminEmail);
+    }
   }
 
-  // Demo services when the catalog is empty
+  // Demo services when the catalog is empty (the Service model manages the 'services' collection).
   if ((await Service.countDocuments()) === 0) {
     await Service.create([
       { name: 'Haircut & Styling', description: "Classic men's and women's haircuts, trims and styling.", category: 'Haircut & Styling', price: 8500, durationMinutes: 45 },
@@ -30,7 +51,7 @@ async function seed() {
     console.log('[seed] Seeded demo services');
   }
 
-  const [userCount, serviceCount] = await Promise.all([User.countDocuments(), Service.countDocuments()]);
+  const [userCount, serviceCount] = await Promise.all([users.countDocuments(), Service.countDocuments()]);
   console.log(`[seed] Users: ${userCount}, Services: ${serviceCount}`);
 }
 

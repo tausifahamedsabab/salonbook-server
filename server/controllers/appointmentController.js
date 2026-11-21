@@ -4,11 +4,10 @@ const Payment = require('../models/Payment');
 const { serializeAppointment } = require('../utils/serialize');
 
 async function getAppointments(req, res) {
-  const query = req.user.role === 'admin' ? {} : { customerId: req.user._id };
+  const query = { customerId: req.user.id };
   if (req.query.status) query.status = String(req.query.status);
   const appointments = await Appointment.find(query)
     .populate('serviceId', 'name price category')
-    .populate('customerId', 'name email')
     .sort({ requestedAt: -1 });
   return res.json({ success: true, appointments: appointments.map(serializeAppointment) });
 }
@@ -23,7 +22,7 @@ async function createAppointment(req, res) {
     return res.status(404).json({ success: false, error: 'Service not found' });
   }
   const appointment = await Appointment.create({
-    customerId: req.user._id,
+    customerId: req.user.id,
     serviceId: service._id,
     serviceName: service.name,
     appointmentDate: new Date(appointmentDate),
@@ -32,7 +31,7 @@ async function createAppointment(req, res) {
   });
   const payment = await Payment.create({
     appointmentId: appointment._id,
-    customerId: req.user._id,
+    customerId: req.user.id,
     amount: Number(service.price) * 100,
     currency: 'usd',
     status: 'pending',
@@ -54,7 +53,7 @@ async function confirmAppointment(req, res) {
 async function cancelAppointment(req, res) {
   const appointment = await Appointment.findById(req.params.id);
   if (!appointment) return res.status(404).json({ success: false, error: 'Appointment not found' });
-  const isOwner = String(appointment.customerId) === String(req.user._id);
+  const isOwner = String(appointment.customerId) === String(req.user.id);
   const isAdmin = req.user.role === 'admin';
   if (!isOwner && !isAdmin) {
     return res.status(403).json({ success: false, error: 'You can only cancel your own appointments' });

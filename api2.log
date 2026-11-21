@@ -1,0 +1,4 @@
+[db] Connected to MongoDB at mongodb://127.0.0.1:27017/salonbook
+[auth] Better Auth MongoDB client connected
+[seed] Users: 7, Services: 12
+[server] REST API listening on http://127.0.0.1:5000
