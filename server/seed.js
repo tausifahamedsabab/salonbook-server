@@ -6,6 +6,7 @@ const { getAuth } = require('./auth');
 async function seed() {
   const auth = getAuth();
   const users = mongoose.connection.db.collection('user');
+  const accounts = mongoose.connection.db.collection('account');
   const services = mongoose.connection.db.collection('services');
 
   // Bootstrap admin from environment (created once via Better Auth).
@@ -13,7 +14,13 @@ async function seed() {
   const adminPassword = process.env.ADMIN_PASSWORD;
   if (adminEmail && adminPassword) {
     const existing = await users.findOne({ email: adminEmail.toLowerCase() });
-    const isBetterAuthUser = Boolean(existing && existing.password);
+    // Better Auth stores credential passwords in the 'account' collection,
+    // not on the user document — check there so restarts never delete/recreate
+    // a valid admin (and its existing sessions).
+    const credentialAccount = existing
+      ? await accounts.findOne({ userId: existing._id, providerId: 'credential' })
+      : null;
+    const isBetterAuthUser = Boolean(existing && credentialAccount);
     // Delete legacy users (old schema) so Better Auth can create the admin cleanly.
     if (existing && !isBetterAuthUser) {
       await users.deleteOne({ _id: existing._id });

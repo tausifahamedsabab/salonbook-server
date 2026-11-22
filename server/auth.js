@@ -6,6 +6,25 @@ const { mongodbAdapter } = require('better-auth/adapters/mongodb');
 let auth = null;
 let client = null;
 
+// Harden the admin role: only the configured ADMIN_EMAIL may hold role 'admin'.
+// Public sign-up (sign-up.mjs) and profile updates (update-user.mjs) copy the
+// caller-supplied role into user records; the databaseHooks below strip the
+// admin role on both paths. Reopen by setting ALLOW_ADMIN_REGISTRATION=true.
+const ADMIN_REGISTRATION_ALLOWED = (process.env.ALLOW_ADMIN_REGISTRATION || '').toLowerCase() === 'true';
+const adminEmail = (process.env.ADMIN_EMAIL || '').toLowerCase();
+
+function adminRoleGuard(user, context) {
+  if (user?.role !== 'admin' || ADMIN_REGISTRATION_ALLOWED) return undefined;
+  const emails = [];
+  if (typeof user.email === 'string') emails.push(user.email.toLowerCase());
+  const sessionEmail = context?.context?.session?.user?.email;
+  if (typeof sessionEmail === 'string') emails.push(sessionEmail.toLowerCase());
+  // NOTE: must return undefined (not null) — Better Auth's with-hooks uses
+  // `"data" in result`, which throws on null.
+  if (adminEmail && emails.includes(adminEmail)) return undefined;
+  return { data: { ...user, role: 'customer' } };
+}
+
 /**
  * Creates the Better Auth instance. Call after MongoDB is connected.
  * Uses the root mongodb driver for the adapter (single bson version).
@@ -41,6 +60,14 @@ function getAuth() {
         additionalFields: {
           role: { type: 'string', default: 'customer', required: false },
           isBlocked: { type: 'boolean', default: false, required: false },
+        },
+      },
+      // Admin role is only assignable to the configured ADMIN_EMAIL (seed path);
+      // public sign-up and profile updates can no longer promote anyone to admin.
+      databaseHooks: {
+        user: {
+          create: { before: (user, context) => adminRoleGuard(user, context) },
+          update: { before: (user, context) => adminRoleGuard(user, context) },
         },
       },
     });
