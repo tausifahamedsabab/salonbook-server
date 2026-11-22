@@ -31,28 +31,13 @@ function serializeAppointment(a) {
   return plain;
 }
 
-function serializePayment(p) {
-  if (!p) return null;
-  const plain = p.toObject({ virtuals: true });
-  plain.appointmentId = deref(plain.appointmentId);
-  plain.customerId = deref(plain.customerId);
-  plain.appointment = p.appointmentId || null;
-  const populatedAppointment = p.appointmentId && typeof p.appointmentId === 'object' ? p.appointmentId : null;
-  plain.service = populatedAppointment?.serviceName || null;
-  plain.serviceId = populatedAppointment?.serviceId || null;
-  plain.appointmentDate = populatedAppointment?.appointmentDate || plain.appointmentDate || null;
-  plain.receiptUrl = plain.receiptUrl || null;
-  plain.updatedAt = new Date(plain.updatedAt).toISOString();
-  return plain;
-}
-
 function serializeTransaction(t) {
   if (!t) return null;
   const plain = t.toObject ? t.toObject({ virtuals: true }) : { ...t };
-  plain.paymentId = deref(plain.paymentId);
   plain.appointmentId = deref(plain.appointmentId);
+  plain.customerId = deref(plain.customerId);
   plain.createdAt = new Date(plain.createdAt).toISOString();
   return plain;
 }
 
-module.exports = { serializeUser, serializeService, serializeAppointment, serializePayment, serializeTransaction };
+module.exports = { serializeUser, serializeService, serializeAppointment, serializeTransaction };

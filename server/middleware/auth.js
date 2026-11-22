@@ -1,13 +1,18 @@
 const { getAuth } = require('../auth');
+const { requireJwt } = require('./requireJwt');
 
 async function requireAuth(req, res, next) {
+  // Machine auth: Bearer JWT verified server-side against JWT_SECRET.
+  if (req.headers.authorization) {
+    return requireJwt(req, res, next);
+  }
   const auth = getAuth();
   try {
     const result = await auth.api.getSession({ headers: new Headers(req.headers) });
     if (!result || !result.user) {
       return res.status(401).json({ success: false, error: 'Please authenticate to continue' });
     }
-    if (result.user.blocked) {
+    if (result.user.isBlocked) {
       return res.status(403).json({ success: false, error: 'This account is blocked' });
     }
     req.user = result.user;

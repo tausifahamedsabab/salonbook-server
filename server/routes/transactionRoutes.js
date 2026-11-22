@@ -7,6 +7,6 @@ const router = express.Router();
 // Admin-only: full transaction list (customer info, service, amount, etc.)
 router.get('/', requireAuth, requireRole('admin'), transactionController.listTransactions);
 router.get('/:id', requireAuth, requireRole('admin'), transactionController.getTransaction);
-router.get('/by-payment/:paymentId', requireAuth, transactionController.getTransactionsForPayment);
+router.get('/by-payment/:paymentId', requireAuth, transactionController.getTransactionsForAppointment);
 
 module.exports = router;

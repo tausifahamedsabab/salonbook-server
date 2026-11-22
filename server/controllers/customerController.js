@@ -7,18 +7,21 @@ function userDocToCustomer(u, stats) {
     name: u.name,
     email: u.email,
     role: u.role || 'customer',
-    blocked: Boolean(u.blocked),
+    isBlocked: Boolean(u.isBlocked),
     createdAt: u.createdAt,
     ...stats,
   };
 }
 
 async function statsForUser(db, userId) {
-  const appointments = await db.collection('appointments').find({ customerId: userId }).toArray();
+  // Appointment.customerId is a ref (ObjectId); legacy rows stored it as a
+  // string — compare as strings so both match.
+  const appointments = (await db.collection('appointments').find({}).toArray())
+    .filter((a) => String(a.customerId) === String(userId));
   const pendingCount = appointments.filter((a) => a.status === 'pending').length;
   const confirmedCount = appointments.filter((a) => a.status === 'confirmed').length;
   const cancelledCount = appointments.filter((a) => a.status === 'cancelled').length;
-  const paidCount = await db.collection('payments').countDocuments({ customerId: userId, status: 'paid' });
+  const paidCount = appointments.filter((a) => a.paymentStatus === 'paid').length;
   return {
     appointmentCount: appointments.length,
     pendingCount,
@@ -63,7 +66,7 @@ async function setBlocked(req, res, blocked) {
   const users = mongoose.connection.db.collection('user');
   const doc = await findUserDoc(users, id);
   if (!doc) return res.status(404).json({ success: false, error: 'User not found' });
-  await users.updateOne({ _id: doc._id }, { $set: { blocked } });
+  await users.updateOne({ _id: doc._id }, { $set: { isBlocked: blocked } });
   const after = await users.findOne({ _id: doc._id }).catch(() => null);
   return res.json({
     success: true,

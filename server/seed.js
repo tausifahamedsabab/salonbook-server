@@ -5,7 +5,7 @@ const { getAuth } = require('./auth');
 
 async function seed() {
   const auth = getAuth();
-  const users = mongoose.connection.db.collection('users');
+  const users = mongoose.connection.db.collection('user');
   const services = mongoose.connection.db.collection('services');
 
   // Bootstrap admin from environment (created once via Better Auth).

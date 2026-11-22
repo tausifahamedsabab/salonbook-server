@@ -1,11 +1,9 @@
-const Payment = require('../models/Payment');
 const Transaction = require('../models/Transaction');
-const { serializePayment } = require('../utils/serialize');
 
 async function listTransactions(req, res) {
   const query = {};
   if (req.query.status) query.status = String(req.query.status);
-  if (req.user.role !== 'admin') query.customerId = req.user.id;
+  if (req.user.role !== 'admin') query.customerId = new (require('mongoose').Types.ObjectId)(req.user.id);
   const transactions = await Transaction.find(query).sort({ createdAt: -1 });
   return res.json({ success: true, transactions });
 }
@@ -16,9 +14,9 @@ async function getTransaction(req, res) {
   return res.json({ success: true, transaction });
 }
 
-async function getTransactionsForPayment(req, res) {
-  const transactions = await Transaction.find({ paymentId: req.params.id });
+async function getTransactionsForAppointment(req, res) {
+  const transactions = await Transaction.find({ appointmentId: req.params.id });
   return res.json({ success: true, transactions });
 }
 
-module.exports = { listTransactions, getTransaction, getTransactionsForPayment };
+module.exports = { listTransactions, getTransaction, getTransactionsForAppointment };

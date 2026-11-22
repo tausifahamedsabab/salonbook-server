@@ -1,39 +1,58 @@
-const Payment = require('../models/Payment');
-const Transaction = require('../models/Transaction');
+const mongoose = require('mongoose');
 const Appointment = require('../models/Appointment');
-const { serializePayment, serializeTransaction } = require('../utils/serialize');
+const Transaction = require('../models/Transaction');
+const { serializeAppointment, serializeTransaction } = require('../utils/serialize');
 const { stripe } = require('../services/stripe');
 
-function serviceNameFor(appointmentId) {
-  if (appointmentId && typeof appointmentId === 'object' && appointmentId.serviceName) {
-    return appointmentId.serviceName;
-  }
-  return '';
+/**
+ * Payment summary: the appointment, serialized with the customer-facing
+ * payment fields (status = appointment.paymentStatus, amount = servicePrice).
+ */
+function paymentSummary(a) {
+  const plain = serializeAppointment(a);
+  return {
+    _id: String(a._id),
+    appointmentId: String(a._id),
+    customerId: plain.customerId,
+    service: a.serviceName || null,
+    serviceId: plain.serviceId,
+    appointmentDate: plain.appointmentDate,
+    amount: a.servicePrice || 0,
+    currency: 'usd',
+    status: a.paymentStatus || 'unpaid',
+    stripeSessionId: a.stripeCheckoutSessionId || '',
+    receiptUrl: null,
+    createdAt: plain.createdAt,
+  };
 }
 
 async function getPayments(req, res) {
   const query = req.user.role === 'admin' ? {} : { customerId: req.user.id };
-  const payments = await Payment.find(query)
-    .populate('appointmentId', 'serviceName appointmentDate serviceId')
-    .sort({ createdAt: -1 });
-  return res.json({ success: true, payments: payments.map(serializePayment) });
+  const appointments = await Appointment.find(query).sort({ requestedAt: -1 });
+  const payments = [];
+  for (const a of appointments) {
+    const payment = paymentSummary(a);
+    const transaction = await Transaction.findOne({ appointmentId: a._id }).sort({ createdAt: -1 });
+    if (transaction) payment.receiptUrl = transaction.receiptUrl || null;
+    payments.push(payment);
+  }
+  return res.json({ success: true, payments });
 }
 
 async function getPayment(req, res) {
   const query = { _id: req.params.id };
   if (req.user.role !== 'admin') query.customerId = req.user.id;
-  const payment = await Payment.findOne(query)
-    .populate('appointmentId', 'serviceName appointmentDate serviceId');
-  if (!payment) return res.status(404).json({ success: false, error: 'Payment not found' });
-  const transaction = await Transaction.findOne({ paymentId: payment._id });
-  const data = serializePayment(payment);
+  const appointment = await Appointment.findOne(query);
+  if (!appointment) return res.status(404).json({ success: false, error: 'Payment not found' });
+  const transaction = await Transaction.findOne({ appointmentId: appointment._id }).sort({ createdAt: -1 });
+  const data = paymentSummary(appointment);
   data.transaction = transaction ? serializeTransaction(transaction) : null;
   return res.json({ success: true, payment: data });
 }
 
 async function createCheckout(req, res) {
   const { appointmentId } = req.params;
-  const appointment = await Appointment.findById(appointmentId).populate('serviceId', 'name serviceName appointmentDate');
+  const appointment = await Appointment.findById(appointmentId);
   if (!appointment) return res.status(404).json({ success: false, error: 'Appointment not found' });
 
   // Ownership: the payer must be the appointment's customer (admins can pay for customers).
@@ -52,18 +71,18 @@ async function createCheckout(req, res) {
     return res.status(503).json({ success: false, error: 'Stripe is not configured. Add STRIPE_SECRET_KEY to your .env file.' });
   }
 
-  const payment = await Payment.findOne({ appointmentId: appointment._id });
-  if (!payment || payment.status !== 'pending') {
+  if (appointment.paymentStatus !== 'unpaid') {
     return res.status(400).json({ success: false, error: 'This appointment is not awaiting payment' });
   }
 
   // Idempotency: reuse the existing session if one was already created.
-  if (payment.stripeCheckoutSessionId) {
-    let url = payment.receiptUrl;
+  if (appointment.stripeCheckoutSessionId) {
     try {
-      url = (await stripe.checkout.sessions.retrieve(payment.stripeCheckoutSessionId)).url || url;
-    } catch { /* keep stored url */ }
-    return res.json({ success: true, sessionId: payment.stripeCheckoutSessionId, url: url || `${process.env.APP_URL || 'http://localhost:3000'}/customer/payment/success?paymentId=${payment._id}` });
+      const session = await stripe.checkout.sessions.retrieve(appointment.stripeCheckoutSessionId);
+      if (session.status !== 'expired') {
+        return res.json({ success: true, sessionId: session.id, url: session.url });
+      }
+    } catch { /* fall through and create a fresh session */ }
   }
 
   const appUrl = process.env.APP_URL || 'http://localhost:3000';
@@ -72,105 +91,91 @@ async function createCheckout(req, res) {
     line_items: [
       {
         price_data: {
-          currency: payment.currency || 'usd',
-          unit_amount: payment.amount,
+          currency: 'usd',
+          unit_amount: appointment.servicePrice || 0,
           product_data: { name: appointment.serviceName || 'Salon service' },
         },
         quantity: 1,
       },
     ],
-    success_url: `${appUrl}/customer/payment/success?paymentId=${payment._id}`,
-    cancel_url: `${appUrl}/customer/payment/cancel?paymentId=${payment._id}`,
-    customer_email: req.user.email,
-    metadata: { appointmentId: appointment._id.toString(), customerId: req.user.id },
+    success_url: `${appUrl}/customer/payment/success?paymentId=${appointment._id}`,
+    cancel_url: `${appUrl}/customer/payment/cancel?paymentId=${appointment._id}`,
+    customer_email: req.user.email || '',
+    metadata: { appointmentId: appointment._id.toString(), customerId: String(appointment.customerId) },
     allow_promotion_codes: true,
   });
-  payment.stripeCheckoutSessionId = session.id;
-  payment.stripePaymentIntentId = session.payment_intent?.id || payment.stripePaymentIntentId || '';
-  await payment.save();
+  appointment.stripeCheckoutSessionId = session.id;
+  await appointment.save();
   return res.json({ success: true, sessionId: session.id, url: session.url });
 }
 
 /**
- * Create (or fetch) the transaction record for a payment. Idempotent.
+ * Mark an appointment as paid (idempotent) and record its transaction.
+ * The webhook and verify endpoint both funnel through here.
  */
-async function createTransactionForPayment(payment, { status = 'paid', receiptUrl = '' } = {}) {
-  const existing = await Transaction.findOne({ paymentId: payment._id }).sort({ createdAt: -1 }).exec();
+async function markPaid(appointment, extra = {}) {
+  if (!appointment || appointment.paymentStatus !== 'unpaid') return null;
+  appointment.paymentStatus = 'paid';
+  await appointment.save();
+  const existing = await Transaction.findOne({ appointmentId: appointment._id }).sort({ createdAt: -1 });
   if (existing) return existing;
   return Transaction.create({
-    paymentId: payment._id,
-    appointmentId: payment.appointmentId,
-    customerId: payment.customerId,
-    serviceName: serviceNameFor(payment.appointmentId),
-    amount: payment.amount,
-    currency: payment.currency || 'usd',
-    status,
-    stripeCheckoutSessionId: payment.stripeCheckoutSessionId || '',
-    receiptUrl,
+    appointmentId: appointment._id,
+    customerId: new mongoose.Types.ObjectId(appointment.customerId),
+    amount: appointment.servicePrice || 0,
+    currency: 'usd',
+    stripeSessionId: appointment.stripeCheckoutSessionId || '',
+    status: 'paid',
+    receiptUrl: extra.receiptUrl || '',
   });
 }
 
 /**
- * Mark a payment as paid after verified confirmation and save its transaction.
- * Idempotent: returns the transaction even when called repeatedly.
+ * Mark an appointment payment as failed (session expired / payment intent failed).
+ * Idempotent: skips payments already paid or already marked failed.
  */
-async function markPaid(payment, extra = {}) {
-  if (payment.status !== 'pending') return payment;
-  if (!payment.stripeCheckoutSessionId && !extra.sessionId) return null;
-  payment.status = 'paid';
-  payment.paidAt = new Date();
-  if (extra.receiptUrl) payment.receiptUrl = extra.receiptUrl;
-  await payment.save();
-  return createTransactionForPayment(payment, { status: 'paid', receiptUrl: extra.receiptUrl || payment.receiptUrl || '' });
-}
-
-/**
- * Mark a payment as failed (expired/cancelled sessions or failed payment intents).
- * Idempotent: skips payments that are already terminal (paid/failed/refunded).
- */
-async function markFailed(payment) {
-  if (!payment || (payment.status !== 'pending' && payment.status !== 'failed')) return;
-  payment.status = 'failed';
-  await payment.save();
-  return createTransactionForPayment(payment, { status: 'failed', receiptUrl: payment.receiptUrl || '' });
+async function markFailed(appointment) {
+  if (!appointment || appointment.paymentStatus === 'paid') return null;
+  appointment.paymentStatus = 'unpaid'; // spec: paymentStatus is (unpaid or paid)
+  await appointment.save();
+  const existing = await Transaction.findOne({ appointmentId: appointment._id, status: 'failed' });
+  if (existing) return existing;
+  return Transaction.create({
+    appointmentId: appointment._id,
+    customerId: new mongoose.Types.ObjectId(appointment.customerId),
+    amount: appointment.servicePrice || 0,
+    currency: 'usd',
+    stripeSessionId: appointment.stripeCheckoutSessionId || '',
+    status: 'failed',
+  });
 }
 
 /**
  * GET /api/payments/:id/verify — used by the Stripe payment success page.
- * Asks Stripe if the checkout session completed, and when it did, marks the
- * payment as paid and saves the transaction (idempotent).
+ * Asks Stripe if the checkout session completed and marks the appointment
+ * as paid via the idempotent markPaid() (which saves the transaction).
  */
 async function verifyPayment(req, res) {
-  const payment = await Payment.findOne({ _id: req.params.id });
-  if (!payment) return res.status(404).json({ success: false, error: 'Payment not found' });
+  const appointment = await Appointment.findOne({ _id: req.params.id });
+  if (!appointment) return res.status(404).json({ success: false, error: 'Payment not found' });
 
-  const isOwner = String(payment.customerId) === String(req.user.id);
+  const isOwner = String(appointment.customerId) === String(req.user.id);
   const isAdmin = req.user.role === 'admin';
-  if (!isAdmin && !isOwner) {
+  if (!isOwner && !isAdmin) {
     return res.status(403).json({ success: false, error: 'You can only verify your own payments' });
   }
 
-  if (!payment.stripeCheckoutSessionId) {
-    // No checkout session created yet — read-only check, webhook is the source of truth.
-    const transaction = await Transaction.findOne({ paymentId: payment._id }).sort({ createdAt: -1 });
-    return res.json({
-      success: true,
-      paid: payment.status === 'paid',
-      payment: serializePayment(payment),
-      transaction: transaction ? serializeTransaction(transaction) : null,
-    });
+  if (appointment.stripeCheckoutSessionId && stripe) {
+    const session = await stripe.checkout.sessions.retrieve(appointment.stripeCheckoutSessionId);
+    if (session.status === 'complete') {
+      await markPaid(appointment, { receiptUrl: session.receipt_url || '' });
+    }
   }
 
-  if (!stripe) {
-    return res.json({ success: true, paid: payment.status === 'paid', payment: serializePayment(payment) });
-  }
-
-  const session = await stripe.checkout.sessions.retrieve(payment.stripeCheckoutSessionId);
-  if (session.status === 'complete') {
-    const transaction = await markPaid(payment, { receiptUrl: session.receipt_url || '' });
-    return res.json({ success: true, paid: true, payment: serializePayment(payment), transaction: serializeTransaction(transaction) });
-  }
-  return res.json({ success: true, paid: payment.status === 'paid', payment: serializePayment(payment) });
+  const transaction = await Transaction.findOne({ appointmentId: appointment._id }).sort({ createdAt: -1 });
+  const data = paymentSummary(appointment);
+  data.transaction = transaction ? serializeTransaction(transaction) : null;
+  return res.json({ success: true, paid: appointment.paymentStatus === 'paid', payment: data, transaction: data.transaction });
 }
 
-module.exports = { getPayments, getPayment, createCheckout, verifyPayment, createTransactionForPayment, markPaid, markFailed };
+module.exports = { getPayments, getPayment, createCheckout, verifyPayment, markPaid, markFailed, paymentSummary };

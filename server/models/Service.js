@@ -5,9 +5,9 @@ const serviceSchema = new mongoose.Schema({
   description: { type: String, default: '', trim: true },
   category: { type: String, default: 'general', trim: true },
   price: { type: Number, required: true, min: 0 },
-  durationMinutes: { type: Number, default: 60, min: 5 },
-  imageUrl: { type: String, default: '' },
-  isActive: { type: Boolean, default: true },
+  duration: { type: Number, default: 60, min: 5 },
+  image: { type: String, default: '' },
+  status: { type: String, enum: ['active', 'inactive'], default: 'active' },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Service', serviceSchema);

@@ -3,7 +3,7 @@ const { serializeUser } = require('../utils/serialize');
 
 // Fields customers/admins may edit on their own profile.
 const ALLOWED_FIELDS = ['name', 'image', 'phone'];
-const LOCKED_FIELDS = ['role', 'blocked'];
+const LOCKED_FIELDS = ['role', 'isBlocked'];
 
 function findUserById(id) {
   const col = mongoose.connection.db.collection('user');
@@ -19,7 +19,7 @@ function serializeProfile(user) {
     image: plain.image || null,
     phone: plain.phone || '',
     role: plain.role || 'customer',
-    blocked: Boolean(plain.blocked),
+    isBlocked: Boolean(plain.isBlocked),
     createdAt: plain.createdAt,
   };
 }

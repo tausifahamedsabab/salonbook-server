@@ -1,6 +1,5 @@
 const Appointment = require('../models/Appointment');
 const Service = require('../models/Service');
-const Payment = require('../models/Payment');
 const { serializeAppointment } = require('../utils/serialize');
 
 async function getAppointments(req, res) {
@@ -14,7 +13,7 @@ async function getAppointments(req, res) {
 }
 
 async function createAppointment(req, res) {
-  const { serviceId, appointmentDate, timeSlot, notes } = req.body || {};
+  const { serviceId, appointmentDate, timeSlot, message: messageInput, notes } = req.body || {};
   if (!serviceId || !appointmentDate) {
     return res.status(400).json({ success: false, error: 'serviceId and appointmentDate are required' });
   }
@@ -23,7 +22,8 @@ async function createAppointment(req, res) {
     return res.status(400).json({ success: false, error: 'appointmentDate must be a valid date/time' });
   }
   const service = await Service.findById(serviceId);
-  if (!service || !service.isActive) {
+  const serviceStatus = service ? (service.status || (service.isActive === false ? 'inactive' : 'active')) : 'inactive';
+  if (!service || serviceStatus !== 'active') {
     return res.status(404).json({ success: false, error: 'Service not found' });
   }
   // Duplicate prevention: an active booking for the same service at the same
@@ -36,24 +36,19 @@ async function createAppointment(req, res) {
   if (duplicate && (timeSlot ? duplicate.timeSlot === String(timeSlot) : true)) {
     return res.status(409).json({ success: false, error: 'This time slot is already booked.' });
   }
+  const message = messageInput !== undefined ? messageInput : notes;
   const appointment = await Appointment.create({
     customerId: req.user.id,
     serviceId: service._id,
     serviceName: service.name,
+    servicePrice: Number(service.price),
     appointmentDate: date,
     timeSlot: timeSlot ? String(timeSlot) : '',
-    notes: notes ? String(notes) : '',
+    message: message ? String(message) : '',
     status: 'pending',
     paymentStatus: 'unpaid',
   });
-  const payment = await Payment.create({
-    appointmentId: appointment._id,
-    customerId: req.user.id,
-    amount: Number(service.price) * 100,
-    currency: 'usd',
-    status: 'pending',
-  });
-  return res.status(201).json({ success: true, appointment: serializeAppointment(appointment), payment });
+  return res.status(201).json({ success: true, appointment: serializeAppointment(appointment) });
 }
 
 async function confirmAppointment(req, res) {

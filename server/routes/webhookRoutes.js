@@ -1,6 +1,6 @@
 const express = require('express');
 const { stripe } = require('../services/stripe');
-const Payment = require('../models/Payment');
+const Appointment = require('../models/Appointment');
 const { markPaid, markFailed } = require('../controllers/paymentController');
 
 const router = express.Router();
@@ -26,24 +26,30 @@ async function handleWebhook(req, res) {
 
   const sessionId = event.data.object?.id;
   const metadata = event.data.object?.metadata || {};
-  const findPayment = async (id) => (id ? Payment.findOne({ stripeCheckoutSessionId: id }).catch(() => null) : null);
+  const findAppointment = async (id) =>
+    (id ? Appointment.findOne({ stripeCheckoutSessionId: id }).catch(() => null) : null);
 
   if (event.type === 'checkout.session.completed') {
-    // Mark payment paid only after a verified signature — never from the success URL alone.
-    const payment = (await findPayment(sessionId)) || Payment.findOne({ appointmentId: metadata.appointmentId }).catch(() => null);
-    if (payment) {
-      await markPaid(payment, { receiptUrl: event.data.object.receipt_url || '' });
+    // Mark the appointment paid after a verified signature — never from the success URL alone.
+    const appointment =
+      (await findAppointment(sessionId)) ||
+      (metadata.appointmentId ? await Appointment.findOne({ _id: metadata.appointmentId }).catch(() => null) : null);
+    if (appointment) {
+      await markPaid(appointment, { receiptUrl: event.data.object.receipt_url || '' });
     }
   } else if (event.type === 'checkout.session.expired') {
-    const payment = (await findPayment(sessionId)) || Payment.findOne({ appointmentId: metadata.appointmentId }).catch(() => null);
-    if (payment) {
-      await markFailed(payment, 'Payment session expired.');
+    const appointment =
+      (await findAppointment(sessionId)) ||
+      (metadata.appointmentId ? await Appointment.findOne({ _id: metadata.appointmentId }).catch(() => null) : null);
+    if (appointment) {
+      await markFailed(appointment);
     }
   } else if (event.type === 'payment_intent.payment_failed') {
-    const payment = (await Payment.findOne({ stripePaymentIntentId: event.data.object.id }).catch(() => null))
-      || (metadata.appointmentId ? await Payment.findOne({ appointmentId: metadata.appointmentId }).catch(() => null) : null);
-    if (payment) {
-      await markFailed(payment, 'Payment failed.');
+    const appointment = metadata.appointmentId
+      ? await Appointment.findOne({ _id: metadata.appointmentId }).catch(() => null)
+      : null;
+    if (appointment) {
+      await markFailed(appointment);
     }
   }
 

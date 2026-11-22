@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const Service = require('../models/Service');
 const Appointment = require('../models/Appointment');
-const Payment = require('../models/Payment');
+const Transaction = require('../models/Transaction');
 
 // Admin dashboard overview statistics.
 async function getAdminStats(req, res) {
@@ -10,11 +10,12 @@ async function getAdminStats(req, res) {
     await Promise.all([
       // Users without a role are customers (Better Auth doesn't default the field).
       users.countDocuments({ role: { $nin: ['admin'] } }),
-      Service.countDocuments({ isActive: true }),
+      // Legacy rows may carry isActive only — count them as active too.
+      Service.countDocuments({ $or: [{ status: 'active' }, { status: { $exists: false }, isActive: { $ne: false } }] }),
       Appointment.countDocuments({}),
       Appointment.countDocuments({ status: 'pending' }),
       Appointment.countDocuments({ status: 'confirmed' }),
-      Payment.countDocuments({ status: 'paid' }),
+      Transaction.countDocuments({ status: 'paid' }),
     ]);
   return res.json({
     success: true,
