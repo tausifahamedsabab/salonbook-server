@@ -48,6 +48,8 @@ Requires Node.js ≥ 20 and a reachable MongoDB instance. Never commit `.env`.
 | --- | --- |
 | `PORT` | API listen port (default 5000) |
 | `MONGODB_URI` | MongoDB Atlas/local connection string |
+| `DNS_SERVERS` | **Local only** — comma-separated DNS servers for sandboxes that cannot resolve MongoDB SRV records; leave unset on Vercel |
+| `RUN_SEED` | Set `true` for one deployment to seed admin/services; otherwise production cold starts skip seeding |
 | `JWT_SECRET` | Secret for signing/verifying JWTs |
 | `BETTER_AUTH_SECRET` | Better Auth secret (required in production) |
 | `BETTER_AUTH_URL` | Backend public URL (required in production; falls back to `APP_URL`) |
@@ -69,17 +71,45 @@ _Live URL to be added here after deployment._
 - Client: https://github.com/tausifahamedsabab/salonbook
 - Server: https://github.com/tausifahamedsabab/salonbook-server
 
-## Deployment Guideline
+## Vercel Deployment (backend)
 
-1. Deploy behind HTTPS on a Node host (Render/Railway/Fly/etc.); expose `PORT` and the `/health` route.
-2. Set every variable above in the host's environment dashboard — never in source control.
-3. Set `APP_URL` to the deployed client origin. CORS and Better Auth `trustedOrigins` are built from it
-   (plus localhost for development). Set `BETTER_AUTH_URL` to the deployed API URL and generate a strong
-   `BETTER_AUTH_SECRET`. If the client and API are on different sites, set `AUTH_COOKIE_CROSS_SITE=true`.
-4. Stripe: register `https://<api-host>/api/webhooks/stripe` in test mode, subscribe to
-   `checkout.session.completed`, `checkout.session.async_payment_succeeded` and `payment_intent.payment_failed`,
-   and copy the endpoint signing secret to `STRIPE_WEBHOOK_SECRET`.
-5. Google: add `https://<api-host>/api/auth/callback/google` to the OAuth client's redirect URIs.
-6. MongoDB Atlas: allow the deploy host's egress IP and use the SRV connection string in `MONGODB_URI`.
-7. Smoke-test the live API: `/health`, admin sign-in, admin stats, customer booking, Stripe test checkout and
-   webhook, then verify a private-route refresh in the frontend.
+This repository is Vercel-ready with **zero build configuration**: `api/index.js` exports the Express app,
+`vercel.json` rewrites every path to that function, and `engines.node` is `>=20`. Vercel runs `npm install`
+automatically; no build command or output directory is needed.
+
+1. Import `https://github.com/tausifahamedsabab/salonbook-server` at vercel.com/new and keep the repository
+   root as the **Root Directory**. Leave Build Command and Output Directory empty.
+2. In **Project Settings → Environment Variables**, add the variables from the table above for Production
+   (and Preview if needed). Never commit values. Specifically:
+   - `MONGODB_URI` — Atlas SRV connection string; allow Vercel egress (or `0.0.0.0/0`) in Atlas Network Access.
+   - `BETTER_AUTH_SECRET` — a long random value; keep it stable across deployments or sessions invalidate.
+   - `BETTER_AUTH_URL` — the public **backend** URL, e.g. `https://salonbook-server.vercel.app`.
+   - `APP_URL` — the public **frontend** URL, e.g. `https://salonbook.vercel.app` (drives CORS, Better Auth
+     trusted origins and Stripe redirects).
+   - `AUTH_COOKIE_CROSS_SITE=true` when client and API are on different sites (sets SameSite=None; Secure).
+     Prefer custom domains under one apex to avoid browsers blocking third-party cookies.
+   - `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ALLOW_ADMIN_REGISTRATION=false`, `STRIPE_SECRET_KEY`,
+     `STRIPE_WEBHOOK_SECRET`, `IMGBB_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
+   - `PORT` is injected by Vercel — do not set it. `STRIPE_PUBLISHABLE_KEY` and `NEXT_PUBLIC_API_URL` are
+     frontend-only variables.
+3. **First deployment only — seed the admin and demo services.** Either set `RUN_SEED=true` for that one
+   deployment, or run `npm run seed` locally with the same env values against the deployed Atlas database
+   (preferred). Production cold starts skip seeding unless `RUN_SEED=true` is explicitly set; remove the
+   flag and redeploy afterwards.
+4. Stripe webhook: add `https://<BACKEND_URL>/api/webhooks/stripe` in test mode for `checkout.session.completed`,
+   `checkout.session.expired` and `payment_intent.payment_failed`; copy its signing secret into
+   `STRIPE_WEBHOOK_SECRET`. The route verifies the raw body before `express.json()` runs.
+5. Google OAuth: register `https://<BACKEND_URL>/api/auth/callback/google` as an authorized redirect URI.
+   Only set `GOOGLE_REDIRECT_URL` if you need to override the callback derived from `BETTER_AUTH_URL`.
+6. Frontend project: set `NEXT_PUBLIC_API_URL=https://<BACKEND_URL>` and
+   `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`.
+7. Request size: Vercel Functions allow 4.5 MB per request by default. This API rejects bodies over 4 MB with
+   a JSON 413 and caps image uploads at 3 MB. Keep image files small; for larger uploads enable Vercel's
+   20 MiB beta (Pro + Performance 4 GB + `VERCEL_SUPPORT_LARGE_REQUEST_BODY=1`) and raise the limits in code.
+8. Verify after deploy: `GET https://<BACKEND_URL>/health` → `{"success":true,"ok":true}`, sign in with the
+   seeded admin, call `/api/admin/stats`, then run a Stripe test payment and confirm the webhook marks it paid.
+9. Local development is unchanged: `npm install`, fill `.env`, `npm start`. `app.listen()` is guarded by
+   `require.main === module`, so importing the app in Vercel never starts a local listener. `vercel dev`
+   (CLI ≥ 47) can be used to exercise the serverless shape locally.
+
+Other Node hosts (Render/Railway/Fly) still work with `npm start` and `PORT`.

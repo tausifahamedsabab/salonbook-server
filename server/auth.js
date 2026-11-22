@@ -5,6 +5,34 @@ const { mongodbAdapter } = require('better-auth/adapters/mongodb');
 
 let auth = null;
 let client = null;
+let clientPromise = null;
+
+function ensureClient() {
+  if (!client) {
+    client = new MongoClient(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/salonbook');
+  }
+  return client;
+}
+
+// Await the Better Auth client connection once per warm instance. The previous
+// fire-and-forget connect() could let the first serverless request reach the
+// adapter before the client was ready.
+async function connectAuth() {
+  if (!clientPromise) {
+    clientPromise = ensureClient()
+      .connect()
+      .then(() => {
+        console.log('[auth] Better Auth MongoDB client connected');
+        return client;
+      })
+      .catch((err) => {
+        clientPromise = null;
+        throw err;
+      });
+  }
+  await clientPromise;
+  return client;
+}
 
 // Harden the admin role: only the configured ADMIN_EMAIL may hold role 'admin'.
 // Public sign-up (sign-up.mjs) and profile updates (update-user.mjs) copy the
@@ -52,12 +80,11 @@ function adminRoleGuard(user, context) {
 function getAuth() {
   if (!auth) {
     assertAuthConfig();
-    client = new MongoClient(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/salonbook');
-    client.connect().then(() => console.log('[auth] Better Auth MongoDB client connected'));
+    const dbClient = ensureClient();
     auth = betterAuth({
       secret: betterAuthSecret || undefined,
       baseURL: betterAuthUrl || undefined,
-      database: mongodbAdapter(client.db('salonbook'), { transaction: false }),
+      database: mongodbAdapter(dbClient.db('salonbook'), { transaction: false }),
       trustedOrigins: authOrigins(),
       // When the deployed client and API live on different sites, cookies must
       // be SameSite=None; Secure for cross-site XHR to carry the session.
@@ -103,4 +130,4 @@ function getAuth() {
   return auth;
 }
 
-module.exports = { getAuth, client: () => client };
+module.exports = { getAuth, connectAuth, client: () => client };

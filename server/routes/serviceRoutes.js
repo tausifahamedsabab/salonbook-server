@@ -4,7 +4,7 @@ const serviceController = require('../controllers/serviceController');
 const { requireAuth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage() }).single('image');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 3 * 1024 * 1024 } }).single('image');
 
 router.get('/', serviceController.getServices);
 // Admin view: all services (active + inactive)

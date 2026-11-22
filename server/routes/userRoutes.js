@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage() }).single('file');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 3 * 1024 * 1024 } }).single('file');
 
 const { requireAuth } = require('../middleware/auth');
 const { uploadImageToImgBB } = require('../services/imgbb');

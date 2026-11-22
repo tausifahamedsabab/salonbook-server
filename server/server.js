@@ -3,67 +3,111 @@ const express = require('express');
 const cors = require('cors');
 const { connectDB } = require('./db');
 
-async function createApp() {
-  await connectDB();
-  const { getAuth } = require('./auth');
-  const { toNodeHandler } = require('better-auth/node');
-  const { seed } = require('./seed');
+const app = express();
+const PORT = process.env.PORT || 5000;
 
-  const app = express();
-  const PORT = process.env.PORT || 5000;
+// Behind a reverse proxy (HTTPS termination), let Express honour X-Forwarded-*.
+app.set('trust proxy', 1);
 
-  // Behind a reverse proxy (HTTPS termination), let Express honour X-Forwarded-*.
-  app.set('trust proxy', 1);
+// Credentialed CORS is restricted to the configured client origin(s).
+const clientOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000'];
+if (process.env.APP_URL && !clientOrigins.includes(process.env.APP_URL)) {
+  clientOrigins.push(process.env.APP_URL);
+}
+app.use(cors({ origin: clientOrigins, credentials: true }));
 
-  // Credentialed CORS is restricted to the configured client origin(s).
-  const clientOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000'];
-  if (process.env.APP_URL && !clientOrigins.includes(process.env.APP_URL)) {
-    clientOrigins.push(process.env.APP_URL);
+// One-time readiness per warm instance: database connections and (opt-in)
+// seeding. Cached so concurrent serverless invocations share a single setup.
+let readyPromise = null;
+async function ensureReady() {
+  if (!readyPromise) {
+    readyPromise = (async () => {
+      await connectDB();
+      const { connectAuth } = require('./auth');
+      await connectAuth();
+      // Seeding is a startup/deployment task, not a per-cold-start side effect.
+      // Local `npm start` keeps seeding as before; production requires RUN_SEED=true
+      // (or run `npm run seed` once against the deployed database).
+      if (process.env.NODE_ENV !== 'production' || process.env.RUN_SEED === 'true') {
+        const { seed } = require('./seed');
+        await seed();
+      }
+    })().catch((err) => {
+      readyPromise = null; // allow the next invocation to retry
+      throw err;
+    });
   }
-  app.use(cors({ origin: clientOrigins, credentials: true }));
-
-  // Webhooks mount BEFORE express.json(): Stripe signature verification needs the
-  // raw request body, and body-parser would otherwise parse it to an object.
-  app.use('/api/webhooks', require('./routes/webhookRoutes'));
-
-  app.use(express.json({ limit: '5mb' }));
-
-  // Better Auth handles /api/auth/* (sign up, sign in, get session, sign out, ...).
-  // express.json() runs first so Better Auth serializes the parsed body from req.body.
-  app.all('/api/auth/*splat', toNodeHandler(getAuth()));
-
-  app.use('/api/services', require('./routes/serviceRoutes'));
-  app.use('/api/admin', require('./routes/adminStatsRoutes'));
-  app.use('/api/admin/transactions', require('./routes/transactionRoutes'));
-  app.use('/api/transactions', require('./routes/transactionRoutes'));
-  app.use('/api/users/profile', require('./routes/profileRoutes'));
-  app.use('/api/appointments', require('./routes/appointmentRoutes'));
-  app.use('/api/payments', require('./routes/paymentRoutes'));
-  app.use('/api/customers', require('./routes/customerRoutes'));
-  app.use('/api/users', require('./routes/userRoutes'));
-
-  app.get('/health', (req, res) => res.json({ success: true, ok: true }));
-
-  app.use((err, req, res, next) => {
-    console.error(`[server] Unhandled error: ${err && err.stack ? err.stack : err}`);
-    return res.status(500).json({ success: false, error: err && err.message ? err.message : 'Internal server error' });
-  });
-
-  app.use((req, res) => {
-    return res.status(404).json({ success: false, error: 'Not found' });
-  });
-
-  await seed();
-  return { app, port: PORT };
+  await readyPromise;
 }
 
-createApp()
-  .then(({ app, port }) => {
-    app.listen(port, () => {
-      console.log(`[server] REST API listening on http://127.0.0.1:${port}`);
-    });
-  })
-  .catch((err) => {
-    console.error('[server] Startup failed:', err);
+app.use((req, res, next) => {
+  ensureReady().then(() => next(), next);
+});
+
+// Webhooks mount BEFORE express.json(): Stripe signature verification needs the
+// raw request body, and body-parser would otherwise parse it to an object.
+app.use('/api/webhooks', require('./routes/webhookRoutes'));
+
+// Vercel Functions accept at most 4.5 MB per request by default, so Express
+// rejects oversized JSON itself with a clear 413 rather than a platform error.
+app.use(express.json({ limit: '4mb' }));
+
+// Better Auth handles /api/auth/* (sign up, sign in, get session, sign out, ...).
+// The handler is created on first use so importing this module never requires
+// production auth env vars to be present at build time.
+let authHandler = null;
+app.all('/api/auth/*splat', (req, res, next) => {
+  if (!authHandler) {
+    const { getAuth } = require('./auth');
+    const { toNodeHandler } = require('better-auth/node');
+    authHandler = toNodeHandler(getAuth());
+  }
+  return authHandler(req, res, next);
+});
+
+app.use('/api/services', require('./routes/serviceRoutes'));
+app.use('/api/admin', require('./routes/adminStatsRoutes'));
+app.use('/api/admin/transactions', require('./routes/transactionRoutes'));
+app.use('/api/transactions', require('./routes/transactionRoutes'));
+app.use('/api/users/profile', require('./routes/profileRoutes'));
+app.use('/api/appointments', require('./routes/appointmentRoutes'));
+app.use('/api/payments', require('./routes/paymentRoutes'));
+app.use('/api/customers', require('./routes/customerRoutes'));
+app.use('/api/users', require('./routes/userRoutes'));
+
+app.get('/health', (req, res) => res.json({ success: true, ok: true }));
+
+// Production-safe errors: clients never see internal messages or stacks.
+app.use((err, req, res, next) => {
+  const tooLarge = Boolean(err && (err.type === 'entity.too.large' || err.code === 'LIMIT_FILE_SIZE'));
+  const clientError = Boolean(err && err.status >= 400 && err.status < 500);
+  const status = tooLarge ? 413 : (clientError ? err.status : 500);
+  if (status === 500) {
+    console.error('[server] Unhandled error:', err && err.stack ? err.stack : err);
+  }
+  const message = tooLarge
+    ? 'Request body too large (maximum 4 MB)'
+    : (status === 500 ? 'Internal server error' : (err && err.message) || 'Request failed');
+  return res.status(status).json({ success: false, error: message });
+});
+
+app.use((req, res) => {
+  return res.status(404).json({ success: false, error: 'Not found' });
+});
+
+// Local development only. Vercel imports the exported app and never calls this.
+async function startLocal() {
+  await ensureReady();
+  return app.listen(PORT, () => {
+    console.log(`[server] REST API listening on http://127.0.0.1:${PORT}`);
+  });
+}
+
+if (require.main === module) {
+  startLocal().catch((err) => {
+    console.error('[server] Startup failed:', err && err.stack ? err.stack : err);
     process.exit(1);
   });
+}
+
+module.exports = { app, ensureReady, startLocal };
