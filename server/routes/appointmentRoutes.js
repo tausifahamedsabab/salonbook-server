@@ -5,7 +5,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const router = express.Router();
 
 router.get('/', requireAuth, appointmentController.getAppointments);
-router.post('/', requireAuth, appointmentController.createAppointment);
+router.post('/', requireAuth, requireRole('customer'), appointmentController.createAppointment);
 router.put('/:id/confirm', requireAuth, requireRole('admin'), appointmentController.confirmAppointment);
 router.put('/:id/cancel', requireAuth, appointmentController.cancelAppointment);
 

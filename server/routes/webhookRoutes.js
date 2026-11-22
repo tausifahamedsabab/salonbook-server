@@ -1,6 +1,7 @@
 const express = require('express');
 const { stripe } = require('../services/stripe');
 const Payment = require('../models/Payment');
+const { markPaid } = require('../controllers/paymentController');
 
 const router = express.Router();
 
@@ -16,13 +17,25 @@ router.post('/stripe', express.raw({ type: 'application/json' }), async (req, re
   } catch (err) {
     return res.status(400).json({ success: false, error: `Webhook signature verification failed: ${err.message}` });
   }
+
   if (event.type === 'checkout.session.completed') {
     const metadata = event.data.object.metadata || {};
     const appointmentId = metadata.appointmentId;
     if (appointmentId) {
-      await Payment.updateOne({ appointmentId, status: 'pending' }, { status: 'paid' });
+      const payment = await Payment.findOne({ appointmentId, status: 'pending' });
+      if (payment) {
+        await markPaid(payment, { receiptUrl: event.data.object.receipt_url || '' });
+      }
     }
   }
+
+  if (event.type === 'checkout.session.expired') {
+    const appointmentId = event.data.object?.metadata?.appointmentId;
+    if (appointmentId) {
+      await Payment.updateOne({ appointmentId, status: 'pending' }, { status: 'failed' });
+    }
+  }
+
   return res.json({ success: true, received: true });
 });
 

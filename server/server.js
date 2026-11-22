@@ -21,6 +21,9 @@ async function createApp() {
 
   app.use('/api/services', require('./routes/serviceRoutes'));
   app.use('/api/admin', require('./routes/adminStatsRoutes'));
+  app.use('/api/admin/transactions', require('./routes/transactionRoutes'));
+  app.use('/api/transactions', require('./routes/transactionRoutes'));
+  app.use('/api/users/profile', require('./routes/profileRoutes'));
   app.use('/api/appointments', require('./routes/appointmentRoutes'));
   app.use('/api/payments', require('./routes/paymentRoutes'));
   app.use('/api/customers', require('./routes/customerRoutes'));

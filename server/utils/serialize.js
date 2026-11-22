@@ -41,8 +41,18 @@ function serializePayment(p) {
   plain.service = populatedAppointment?.serviceName || null;
   plain.serviceId = populatedAppointment?.serviceId || null;
   plain.appointmentDate = populatedAppointment?.appointmentDate || plain.appointmentDate || null;
+  plain.receiptUrl = plain.receiptUrl || null;
   plain.updatedAt = new Date(plain.updatedAt).toISOString();
   return plain;
 }
 
-module.exports = { serializeUser, serializeService, serializeAppointment, serializePayment };
+function serializeTransaction(t) {
+  if (!t) return null;
+  const plain = t.toObject ? t.toObject({ virtuals: true }) : { ...t };
+  plain.paymentId = deref(plain.paymentId);
+  plain.appointmentId = deref(plain.appointmentId);
+  plain.createdAt = new Date(plain.createdAt).toISOString();
+  return plain;
+}
+
+module.exports = { serializeUser, serializeService, serializeAppointment, serializePayment, serializeTransaction };

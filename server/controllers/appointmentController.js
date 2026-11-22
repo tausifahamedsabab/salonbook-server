@@ -6,7 +6,7 @@ const { serializeAppointment } = require('../utils/serialize');
 async function getAppointments(req, res) {
   // Admins see every appointment request; customers see only their own.
   const query = req.user.role === 'admin' ? {} : { customerId: req.user.id };
-  if (req.query.status) query.status = String(req.query.status);
+  if (req.query.status && req.query.status !== 'all') query.status = String(req.query.status);
   const appointments = await Appointment.find(query)
     .populate('serviceId', 'name price category')
     .sort({ requestedAt: -1 });
