@@ -128,12 +128,11 @@ async function markPaid(payment, extra = {}) {
  * Mark a payment as failed (expired/cancelled sessions or failed payment intents).
  * Idempotent: skips payments that are already terminal (paid/failed/refunded).
  */
-async function markFailed(payment, message) {
+async function markFailed(payment) {
   if (!payment || (payment.status !== 'pending' && payment.status !== 'failed')) return;
-  if (message && !payment.receiptUrl) payment.receiptUrl = message;
   payment.status = 'failed';
   await payment.save();
-  return createTransactionForPayment(payment, { status: 'failed', receiptUrl: message || '' });
+  return createTransactionForPayment(payment, { status: 'failed', receiptUrl: payment.receiptUrl || '' });
 }
 
 /**
@@ -174,4 +173,4 @@ async function verifyPayment(req, res) {
   return res.json({ success: true, paid: payment.status === 'paid', payment: serializePayment(payment) });
 }
 
-module.exports = { getPayments, getPayment, createCheckout, verifyPayment, createTransactionForPayment, markPaid };
+module.exports = { getPayments, getPayment, createCheckout, verifyPayment, createTransactionForPayment, markPaid, markFailed };

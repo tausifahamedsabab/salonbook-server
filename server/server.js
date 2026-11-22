@@ -13,6 +13,11 @@ async function createApp() {
   const PORT = process.env.PORT || 5000;
 
   app.use(cors({ origin: true, credentials: true }));
+
+  // Webhooks mount BEFORE express.json(): Stripe signature verification needs the
+  // raw request body, and body-parser would otherwise parse it to an object.
+  app.use('/api/webhooks', require('./routes/webhookRoutes'));
+
   app.use(express.json({ limit: '5mb' }));
 
   // Better Auth handles /api/auth/* (sign up, sign in, get session, sign out, ...).
@@ -28,7 +33,6 @@ async function createApp() {
   app.use('/api/payments', require('./routes/paymentRoutes'));
   app.use('/api/customers', require('./routes/customerRoutes'));
   app.use('/api/users', require('./routes/userRoutes'));
-  app.use('/api/webhooks', require('./routes/webhookRoutes'));
 
   app.get('/health', (req, res) => res.json({ success: true, ok: true }));
 
