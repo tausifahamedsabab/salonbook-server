@@ -1,6 +1,4 @@
 const { MongoClient } = require("mongodb");
-const { mongodbAdapter: cjsMongodbAdapter } =
-  require("better-auth/adapters/mongodb").catch?.(() => ({})) || {};
 
 let auth = null;
 let betterAuthModPromise = null;
@@ -14,7 +12,7 @@ function loadBetterAuthModules() {
       import("better-auth/adapters/mongodb"),
     ]).then(([authMod, adapterMod]) => ({
       betterAuth: authMod.betterAuth,
-      mongodbAdapter: adapterMod.mongodbAdapter || cjsMongodbAdapter,
+      mongodbAdapter: adapterMod.mongodbAdapter,
     }));
   }
   return betterAuthModPromise;
@@ -82,10 +80,6 @@ function adminRoleGuard(user, context) {
   return { data: { ...user, role: "customer" } };
 }
 
-/**
- * Creates/returns the Better Auth instance asynchronously.
- * Call after connectAuth() / MongoDB connection.
- */
 async function getAuth() {
   if (!auth) {
     assertAuthConfig();
