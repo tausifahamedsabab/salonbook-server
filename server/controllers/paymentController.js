@@ -35,13 +35,37 @@ async function createCheckout(req, res) {
   const { appointmentId } = req.params;
   const appointment = await Appointment.findById(appointmentId).populate('serviceId', 'name serviceName appointmentDate');
   if (!appointment) return res.status(404).json({ success: false, error: 'Appointment not found' });
+
+  // Ownership: the payer must be the appointment's customer (admins can pay for customers).
+  const isOwner = String(appointment.customerId) === String(req.user.id);
+  const isAdmin = req.user.role === 'admin';
+  if (!isOwner && !isAdmin) {
+    return res.status(403).json({ success: false, error: 'You can only pay for your own appointments' });
+  }
+
+  // Only confirmed appointments can be paid.
+  if (appointment.status !== 'confirmed') {
+    return res.status(400).json({ success: false, error: 'Appointment must be confirmed before payment' });
+  }
+
   if (!stripe) {
     return res.status(503).json({ success: false, error: 'Stripe is not configured. Add STRIPE_SECRET_KEY to your .env file.' });
   }
+
   const payment = await Payment.findOne({ appointmentId: appointment._id });
   if (!payment || payment.status !== 'pending') {
     return res.status(400).json({ success: false, error: 'This appointment is not awaiting payment' });
   }
+
+  // Idempotency: reuse the existing session if one was already created.
+  if (payment.stripeCheckoutSessionId) {
+    let url = payment.receiptUrl;
+    try {
+      url = (await stripe.checkout.sessions.retrieve(payment.stripeCheckoutSessionId)).url || url;
+    } catch { /* keep stored url */ }
+    return res.json({ success: true, sessionId: payment.stripeCheckoutSessionId, url: url || `${process.env.APP_URL || 'http://localhost:3000'}/customer/payment/success?paymentId=${payment._id}` });
+  }
+
   const appUrl = process.env.APP_URL || 'http://localhost:3000';
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
@@ -62,6 +86,7 @@ async function createCheckout(req, res) {
     allow_promotion_codes: true,
   });
   payment.stripeCheckoutSessionId = session.id;
+  payment.stripePaymentIntentId = session.payment_intent?.id || payment.stripePaymentIntentId || '';
   await payment.save();
   return res.json({ success: true, sessionId: session.id, url: session.url });
 }
@@ -90,11 +115,25 @@ async function createTransactionForPayment(payment, { status = 'paid', receiptUr
  * Idempotent: returns the transaction even when called repeatedly.
  */
 async function markPaid(payment, extra = {}) {
+  if (payment.status !== 'pending') return payment;
   if (!payment.stripeCheckoutSessionId && !extra.sessionId) return null;
   payment.status = 'paid';
+  payment.paidAt = new Date();
   if (extra.receiptUrl) payment.receiptUrl = extra.receiptUrl;
   await payment.save();
   return createTransactionForPayment(payment, { status: 'paid', receiptUrl: extra.receiptUrl || payment.receiptUrl || '' });
+}
+
+/**
+ * Mark a payment as failed (expired/cancelled sessions or failed payment intents).
+ * Idempotent: skips payments that are already terminal (paid/failed/refunded).
+ */
+async function markFailed(payment, message) {
+  if (!payment || (payment.status !== 'pending' && payment.status !== 'failed')) return;
+  if (message && !payment.receiptUrl) payment.receiptUrl = message;
+  payment.status = 'failed';
+  await payment.save();
+  return createTransactionForPayment(payment, { status: 'failed', receiptUrl: message || '' });
 }
 
 /**

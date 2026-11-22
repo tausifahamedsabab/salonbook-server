@@ -6,8 +6,11 @@ const paymentSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
   currency: { type: String, default: 'usd' },
   status: { type: String, enum: ['pending', 'paid', 'refunded', 'failed'], default: 'pending' },
+  paymentProvider: { type: String, default: 'stripe' },
   stripeCheckoutSessionId: { type: String, default: '' },
+  stripePaymentIntentId: { type: String, default: '' },
   receiptUrl: { type: String, default: '' },
+  paidAt: { type: Date },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Payment', paymentSchema);
