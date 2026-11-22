@@ -13,6 +13,26 @@ let client = null;
 const ADMIN_REGISTRATION_ALLOWED = (process.env.ALLOW_ADMIN_REGISTRATION || '').toLowerCase() === 'true';
 const adminEmail = (process.env.ADMIN_EMAIL || '').toLowerCase();
 
+const isProduction = process.env.NODE_ENV === 'production';
+const appUrl = process.env.APP_URL;
+const betterAuthSecret = process.env.BETTER_AUTH_SECRET;
+const betterAuthUrl = process.env.BETTER_AUTH_URL || appUrl;
+
+function assertAuthConfig() {
+  if (isProduction && !betterAuthSecret) {
+    throw new Error('[auth] BETTER_AUTH_SECRET must be set in production');
+  }
+  if (isProduction && !betterAuthUrl) {
+    throw new Error('[auth] BETTER_AUTH_URL (or APP_URL) must be set in production');
+  }
+}
+
+function authOrigins() {
+  const origins = ['http://localhost:3000', 'http://127.0.0.1:3000'];
+  if (appUrl && !origins.includes(appUrl)) origins.push(appUrl);
+  return origins;
+}
+
 function adminRoleGuard(user, context) {
   if (user?.role !== 'admin' || ADMIN_REGISTRATION_ALLOWED) return undefined;
   const emails = [];
@@ -31,11 +51,19 @@ function adminRoleGuard(user, context) {
  */
 function getAuth() {
   if (!auth) {
+    assertAuthConfig();
     client = new MongoClient(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/salonbook');
     client.connect().then(() => console.log('[auth] Better Auth MongoDB client connected'));
     auth = betterAuth({
+      secret: betterAuthSecret || undefined,
+      baseURL: betterAuthUrl || undefined,
       database: mongodbAdapter(client.db('salonbook'), { transaction: false }),
-      trustedOrigins: ['http://localhost:3000'],
+      trustedOrigins: authOrigins(),
+      // When the deployed client and API live on different sites, cookies must
+      // be SameSite=None; Secure for cross-site XHR to carry the session.
+      advanced: (process.env.AUTH_COOKIE_CROSS_SITE || '').toLowerCase() === 'true'
+        ? { defaultCookieAttributes: { sameSite: 'none', secure: true } }
+        : {},
       emailAndPassword: {
         enabled: true,
       },

@@ -85,7 +85,11 @@ async function createCheckout(req, res) {
     } catch { /* fall through and create a fresh session */ }
   }
 
-  const appUrl = process.env.APP_URL || 'http://localhost:3000';
+  // Stripe redirect URLs must point at the deployed client in production.
+  const appUrl = process.env.APP_URL || (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:3000');
+  if (!appUrl) {
+    return res.status(500).json({ success: false, error: 'APP_URL is not configured' });
+  }
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
     line_items: [

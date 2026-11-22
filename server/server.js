@@ -12,7 +12,15 @@ async function createApp() {
   const app = express();
   const PORT = process.env.PORT || 5000;
 
-  app.use(cors({ origin: true, credentials: true }));
+  // Behind a reverse proxy (HTTPS termination), let Express honour X-Forwarded-*.
+  app.set('trust proxy', 1);
+
+  // Credentialed CORS is restricted to the configured client origin(s).
+  const clientOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000'];
+  if (process.env.APP_URL && !clientOrigins.includes(process.env.APP_URL)) {
+    clientOrigins.push(process.env.APP_URL);
+  }
+  app.use(cors({ origin: clientOrigins, credentials: true }));
 
   // Webhooks mount BEFORE express.json(): Stripe signature verification needs the
   // raw request body, and body-parser would otherwise parse it to an object.
