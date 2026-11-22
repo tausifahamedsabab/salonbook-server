@@ -27,6 +27,15 @@ function getAuth() {
           ...(process.env.GOOGLE_REDIRECT_URL ? { redirectURL: process.env.GOOGLE_REDIRECT_URL } : {}),
         },
       },
+      account: {
+        accountLinking: {
+          // Allow Google sign-in to link to accounts created via email sign-up.
+          // Google returns a verified email, so skip the local-verification requirement.
+          enabled: true,
+          trustedProviders: ['google'],
+          requireLocalEmailVerified: false,
+        },
+      },
       user: {
         // Every user is a customer; admins are seeded from ADMIN_EMAIL/ADMIN_PASSWORD.
         additionalFields: {
