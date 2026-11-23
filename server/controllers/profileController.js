@@ -25,8 +25,14 @@ function serializeProfile(user) {
 }
 
 async function getProfile(req, res) {
-  const user = await findUserById(req.params.id || req.user.id).catch(() => null);
+  const id = req.params.id || req.user.id;
+  const user = await findUserById(id).catch(() => null);
   if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+  // Ownership: only the user themself, or an admin reading anyone.
+  const owner = String(user._id) === String(req.user.id);
+  if (!owner && req.user.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'You can only view your own profile' });
+  }
   return res.json({ success: true, profile: serializeProfile(user) });
 }
 

@@ -1,6 +1,34 @@
 const Appointment = require('../models/Appointment');
 const Service = require('../models/Service');
+const { TIME_SLOTS } = require('../constants');
 const { serializeAppointment } = require('../utils/serialize');
+
+function dateKeyInTimeZone(timeZone) {
+  const zone = typeof timeZone === 'string' && timeZone.trim() ? timeZone.trim() : 'UTC';
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
+  } catch {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date());
+  }
+}
+
+function minutesInTimeZone(timeZone) {
+  const zone = typeof timeZone === 'string' && timeZone.trim() ? timeZone.trim() : 'UTC';
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date());
+    const hour = Number(parts.find((p) => p.type === 'hour')?.value || 0);
+    const minute = Number(parts.find((p) => p.type === 'minute')?.value || 0);
+    return hour * 60 + minute;
+  } catch {
+    return null;
+  }
+}
 
 async function getAppointments(req, res) {
   // Admins see every appointment request; customers see only their own.
@@ -13,14 +41,42 @@ async function getAppointments(req, res) {
 }
 
 async function createAppointment(req, res) {
-  const { serviceId, appointmentDate, timeSlot, message: messageInput, notes } = req.body || {};
+  const { serviceId, appointmentDate, timeSlot, message: messageInput, notes, timezone } = req.body || {};
   if (!serviceId || !appointmentDate) {
     return res.status(400).json({ success: false, error: 'serviceId and appointmentDate are required' });
   }
-  const date = new Date(appointmentDate);
-  if (Number.isNaN(date.getTime())) {
-    return res.status(400).json({ success: false, error: 'appointmentDate must be a valid date/time' });
+
+  const rawDate = String(appointmentDate);
+  const dateKey = rawDate.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    return res.status(400).json({ success: false, error: 'appointmentDate must be a valid date (YYYY-MM-DD)' });
   }
+  const probe = new Date(`${dateKey}T00:00:00Z`);
+  if (Number.isNaN(probe.getTime()) || probe.toISOString().slice(0, 10) !== dateKey) {
+    return res.status(400).json({ success: false, error: 'appointmentDate must be a valid date' });
+  }
+  const slotRaw = timeSlot || (rawDate.includes('T') ? rawDate.slice(11, 16) : '');
+  const slot = slotRaw ? String(slotRaw) : '';
+  if (slot && !TIME_SLOTS.includes(slot)) {
+    return res.status(400).json({ success: false, error: 'Invalid time slot' });
+  }
+
+  // "Today" is computed in the browser's timezone so local users are never
+  // rejected because the server runs in UTC.
+  const zone = typeof timezone === 'string' && timezone.trim() ? timezone.trim() : 'UTC';
+  const todayKey = dateKeyInTimeZone(zone);
+  if (dateKey < todayKey) {
+    return res.status(400).json({ success: false, error: 'Appointment date cannot be in the past.' });
+  }
+  if (dateKey === todayKey && slot) {
+    const [hour, minute] = slot.split(':').map(Number);
+    const now = minutesInTimeZone(zone);
+    if (now !== null && hour * 60 + minute <= now) {
+      return res.status(400).json({ success: false, error: 'This time slot has already passed today.' });
+    }
+  }
+
+  const date = new Date(`${dateKey}T${slot || '00:00'}:00`);
   const service = await Service.findById(serviceId);
   const serviceStatus = service ? (service.status || (service.isActive === false ? 'inactive' : 'active')) : 'inactive';
   if (!service || serviceStatus !== 'active') {
@@ -33,7 +89,7 @@ async function createAppointment(req, res) {
     appointmentDate: date,
     status: { $ne: 'cancelled' },
   });
-  if (duplicate && (timeSlot ? duplicate.timeSlot === String(timeSlot) : true)) {
+  if (duplicate && (slot ? duplicate.timeSlot === slot : true)) {
     return res.status(409).json({ success: false, error: 'This time slot is already booked.' });
   }
   const message = messageInput !== undefined ? messageInput : notes;
@@ -43,7 +99,7 @@ async function createAppointment(req, res) {
     serviceName: service.name,
     servicePrice: Number(service.price),
     appointmentDate: date,
-    timeSlot: timeSlot ? String(timeSlot) : '',
+    timeSlot: slot,
     message: message ? String(message) : '',
     status: 'pending',
     paymentStatus: 'unpaid',

@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Transaction = require('../models/Transaction');
 
 async function listTransactions(req, res) {
@@ -15,7 +16,13 @@ async function getTransaction(req, res) {
 }
 
 async function getTransactionsForAppointment(req, res) {
-  const transactions = await Transaction.find({ appointmentId: req.params.id });
+  // The route parameter is `paymentId`; reading `req.params.id` here used to
+  // produce an unbounded query that returned every transaction in the system.
+  const paymentId = String(req.params.paymentId || '');
+  if (!mongoose.Types.ObjectId.isValid(paymentId)) {
+    return res.status(400).json({ success: false, error: 'Invalid payment id' });
+  }
+  const transactions = await Transaction.find({ appointmentId: paymentId });
   return res.json({ success: true, transactions });
 }
 

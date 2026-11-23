@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node server/server.js",
     "start": "node server/server.js",
-    "seed": "node scripts/seed.js"
+    "seed": "node scripts/seed.js",
+    "check:env": "node scripts/check-env.js"
   },
   "keywords": [],
   "author": "",

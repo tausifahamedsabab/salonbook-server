@@ -90,24 +90,39 @@ async function createCheckout(req, res) {
   if (!appUrl) {
     return res.status(500).json({ success: false, error: 'APP_URL is not configured' });
   }
-  const session = await stripe.checkout.sessions.create({
-    mode: 'payment',
-    line_items: [
-      {
-        price_data: {
-          currency: 'usd',
-          unit_amount: appointment.servicePrice || 0,
-          product_data: { name: appointment.serviceName || 'Salon service' },
+  // Stripe Checkout requires a minimum charge of $0.50 (50 cents).
+  const amount = Number(appointment.servicePrice) || 0;
+  if (amount < 50) {
+    return res.status(400).json({
+      success: false,
+      error: 'This appointment amount is below the $0.50 minimum for online payment. Please contact the salon.',
+    });
+  }
+
+  let session;
+  try {
+    session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [
+        {
+          price_data: {
+            currency: 'usd',
+            unit_amount: amount,
+            product_data: { name: appointment.serviceName || 'Salon service' },
+          },
+          quantity: 1,
         },
-        quantity: 1,
-      },
-    ],
-    success_url: `${appUrl}/customer/payment/success?paymentId=${appointment._id}`,
-    cancel_url: `${appUrl}/customer/payment/cancel?paymentId=${appointment._id}`,
-    customer_email: req.user.email || '',
-    metadata: { appointmentId: appointment._id.toString(), customerId: String(appointment.customerId) },
-    allow_promotion_codes: true,
-  });
+      ],
+      success_url: `${appUrl}/customer/payment/success?paymentId=${appointment._id}`,
+      cancel_url: `${appUrl}/customer/payment/cancel?paymentId=${appointment._id}`,
+      customer_email: req.user.email || '',
+      metadata: { appointmentId: appointment._id.toString(), customerId: String(appointment.customerId) },
+      allow_promotion_codes: true,
+    });
+  } catch (err) {
+    console.error('[stripe] checkout session creation failed:', err && err.message ? err.message : err);
+    return res.status(502).json({ success: false, error: 'Could not start checkout. Please try again later.' });
+  }
   appointment.stripeCheckoutSessionId = session.id;
   await appointment.save();
   return res.json({ success: true, sessionId: session.id, url: session.url });
@@ -115,7 +130,7 @@ async function createCheckout(req, res) {
 
 /**
  * Mark an appointment as paid (idempotent) and record its transaction.
- * The webhook and verify endpoint both funnel through here.
+ * Only the signature-verified Stripe webhook may call this.
  */
 async function markPaid(appointment, extra = {}) {
   if (!appointment || appointment.paymentStatus !== 'unpaid') return null;
@@ -156,8 +171,9 @@ async function markFailed(appointment) {
 
 /**
  * GET /api/payments/:id/verify — used by the Stripe payment success page.
- * Asks Stripe if the checkout session completed and marks the appointment
- * as paid via the idempotent markPaid() (which saves the transaction).
+ * READ-ONLY: payment status and transactions are written only by the verified
+ * Stripe webhook (webhookRoutes.js). This endpoint just reports the current
+ * stored state so the success page can poll until the webhook lands.
  */
 async function verifyPayment(req, res) {
   const appointment = await Appointment.findOne({ _id: req.params.id });
@@ -167,13 +183,6 @@ async function verifyPayment(req, res) {
   const isAdmin = req.user.role === 'admin';
   if (!isOwner && !isAdmin) {
     return res.status(403).json({ success: false, error: 'You can only verify your own payments' });
-  }
-
-  if (appointment.stripeCheckoutSessionId && stripe) {
-    const session = await stripe.checkout.sessions.retrieve(appointment.stripeCheckoutSessionId);
-    if (session.status === 'complete') {
-      await markPaid(appointment, { receiptUrl: session.receipt_url || '' });
-    }
   }
 
   const transaction = await Transaction.findOne({ appointmentId: appointment._id }).sort({ createdAt: -1 });

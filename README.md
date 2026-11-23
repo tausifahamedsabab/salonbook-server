@@ -7,7 +7,8 @@ customer management and admin statistics, backed by MongoDB.
 
 - **Authentication**: Better Auth email/password and Google sign-in with HTTP-only session cookies;
   JWT Bearer verification middleware for machine clients; server-side `requireAuth` / `requireRole` guards;
-  blocked users receive 403; public sign-up can never create an admin.
+  role and blocked state are re-read from the database on every authenticated request (JWT claims are never
+  trusted), blocked users receive 403, and `role`/`isBlocked` cannot be written through Better Auth endpoints.
 - **Services**: public active-only listing, search by name, category filter and price sorting; admin CRUD with
   ImgBB image uploads and active/inactive status.
 - **Appointments**: customer-only booking with predefined time slots, duplicate booking conflict detection,
@@ -38,9 +39,11 @@ Requires Node.js ≥ 20 and a reachable MongoDB instance. Never commit `.env`.
 
 1. Make sure MongoDB is running (the client repo has `npm run mongo` for an in-memory instance).
 2. Set `MONGODB_URI`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` and the other variables in `.env`.
-3. Start the API: `npm start` (or `npm run dev`) — it listens on `http://127.0.0.1:5000` by default.
-4. Check `GET /health`, then run the frontend on port 3000 (`npm run dev` in the client repo).
-5. The first start seeds the admin account and demo services (only when the collections are empty).
+3. Run `npm run check:env` to validate every required variable (prints names only, never values).
+4. Start the API: `npm start` (or `npm run dev`) — it listens on `http://127.0.0.1:5000` by default.
+5. Check `GET /health` and `GET /api/auth/get-session` (expect `200 null` when signed out), then run the
+   frontend on port 3000 (`npm run dev` in the client repo).
+6. The first start seeds the admin account and demo services (only when the collections are empty).
 
 ## Required Environment Variables (names only — never commit values)
 
@@ -51,8 +54,8 @@ Requires Node.js ≥ 20 and a reachable MongoDB instance. Never commit `.env`.
 | `DNS_SERVERS` | **Local only** — comma-separated DNS servers for sandboxes that cannot resolve MongoDB SRV records; leave unset on Vercel |
 | `RUN_SEED` | Set `true` for one deployment to seed admin/services; otherwise production cold starts skip seeding |
 | `JWT_SECRET` | Secret for signing/verifying JWTs |
-| `BETTER_AUTH_SECRET` | Better Auth secret (required in production) |
-| `BETTER_AUTH_URL` | Backend public URL (required in production; falls back to `APP_URL`) |
+| `BETTER_AUTH_SECRET` | Better Auth secret (recommended, min 32 chars, stable across deploys; otherwise derived from `JWT_SECRET`) |
+| `BETTER_AUTH_URL` | Backend public URL (recommended, no trailing slash; falls back to `VERCEL_URL`, then a dynamic `allowedHosts` base URL — never to `APP_URL`) |
 | `APP_URL` | Frontend public URL: CORS origin, Better Auth trusted origin, Stripe redirect base |
 | `AUTH_COOKIE_CROSS_SITE` | `true` for cross-site deployments (SameSite=None; Secure cookies) |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | One-time seeded administrator credentials |
@@ -82,8 +85,13 @@ automatically; no build command or output directory is needed.
 2. In **Project Settings → Environment Variables**, add the variables from the table above for Production
    (and Preview if needed). Never commit values. Specifically:
    - `MONGODB_URI` — Atlas SRV connection string; allow Vercel egress (or `0.0.0.0/0`) in Atlas Network Access.
-   - `BETTER_AUTH_SECRET` — a long random value; keep it stable across deployments or sessions invalidate.
-   - `BETTER_AUTH_URL` — the public **backend** URL, e.g. `https://salonbook-server.vercel.app`.
+   - `BETTER_AUTH_SECRET` — a random value of at least 32 characters (generate with
+     `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`). Keep it stable across
+     deployments or every session is invalidated. If omitted, a stable value is derived from `JWT_SECRET`
+     and a warning is logged.
+   - `BETTER_AUTH_URL` — the public **backend** URL, e.g. `https://salonbook-server.vercel.app`, with **no
+     trailing slash**. Do NOT set this to the frontend URL. If omitted, it falls back to `VERCEL_URL`, then
+     to Better Auth's dynamic base URL derived from the request host.
    - `APP_URL` — the public **frontend** URL, e.g. `https://salonbook.vercel.app` (drives CORS, Better Auth
      trusted origins and Stripe redirects).
    - `AUTH_COOKIE_CROSS_SITE=true` when client and API are on different sites (sets SameSite=None; Secure).
@@ -106,8 +114,12 @@ automatically; no build command or output directory is needed.
 7. Request size: Vercel Functions allow 4.5 MB per request by default. This API rejects bodies over 4 MB with
    a JSON 413 and caps image uploads at 3 MB. Keep image files small; for larger uploads enable Vercel's
    20 MiB beta (Pro + Performance 4 GB + `VERCEL_SUPPORT_LARGE_REQUEST_BODY=1`) and raise the limits in code.
-8. Verify after deploy: `GET https://<BACKEND_URL>/health` → `{"success":true,"ok":true}`, sign in with the
-   seeded admin, call `/api/admin/stats`, then run a Stripe test payment and confirm the webhook marks it paid.
+8. Verify after deploy: `GET https://<BACKEND_URL>/health` → `{"success":true,"ok":true}` and
+   `GET https://<BACKEND_URL>/api/auth/get-session` → `200 null` when signed out. Auth config now resolves
+   itself from `VERCEL_URL`/request host and `JWT_SECRET` when the `BETTER_AUTH_*` variables are absent, so
+   this endpoint no longer 500s; the cold-start log still names any fallbacks in use. Then sign in with the
+   seeded admin, call `/api/admin/stats`, and run a Stripe test payment to confirm the webhook marks it paid
+   (the verify endpoint is read-only). Locally preflight values with `npm run check:env -- --production`.
 9. Local development is unchanged: `npm install`, fill `.env`, `npm start`. `app.listen()` is guarded by
    `require.main === module`, so importing the app in Vercel never starts a local listener. `vercel dev`
    (CLI ≥ 47) can be used to exercise the serverless shape locally.
