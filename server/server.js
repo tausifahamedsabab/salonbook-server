@@ -69,19 +69,28 @@ app.use(express.json({ limit: "4mb" }));
 // Better Auth handles /api/auth/* (sign up, sign in, get session, sign out, ...).
 // The handler is created on first use so importing this module never requires
 // production auth env vars to be present at build time.
-let authHandler = null;
+// `better-auth/node` is ESM-only in v1.7.x. This app is CommonJS, so load it
+// with a dynamic import (cached) instead of require(), which throws
+// ERR_REQUIRE_ESM on Node 20/22 in Vercel's runtime.
+let authHandlerPromise = null;
 
 async function getAuthHandler() {
-  if (!authHandler) {
-    const { getAuth } = require("./auth");
-    const { toNodeHandler } = require("better-auth/node");
-    const authInstance = await getAuth();
-    authHandler = toNodeHandler(authInstance);
+  if (!authHandlerPromise) {
+    authHandlerPromise = (async () => {
+      const { getAuth } = require("./auth");
+      const { toNodeHandler } = await import("better-auth/node");
+      const authInstance = await getAuth();
+      const handler = toNodeHandler(authInstance);
+      if (typeof handler !== "function") {
+        throw new Error("Better Auth handler is not a function");
+      }
+      return handler;
+    })().catch((err) => {
+      authHandlerPromise = null; // allow retry after a transient failure
+      throw err;
+    });
   }
-  if (typeof authHandler !== "function") {
-    throw new Error("Better Auth handler is not a function");
-  }
-  return authHandler;
+  return authHandlerPromise;
 }
 
 app.all("/api/auth/*splat", async (req, res, next) => {
